@@ -123,13 +123,14 @@ outside = outside.dissolve(by=["z", "y"], as_index=False)
 outside["a"] = (outside.geometry.intersection(lower_48_land).area / square_meters_per_acre).round().astype("int64")
 
 # Coast ####
-# Every area runs 3 km past the shoreline and the page clips it to the land,
-# so simplified outlines never fall short of the coast.
+# Every area runs 8 km past the shoreline and the page clips it to the land,
+# so simplified outlines never fall short of the coast and no outline is
+# drawn along the water.
 
-near_shore = lower_48_land.buffer(3000)
+near_shore = lower_48_land.buffer(8000)
 offshore = near_shore.difference(lower_48_land)
-cessions["geometry"] = cessions.geometry.union(cessions.geometry.buffer(3000).intersection(offshore)).intersection(near_shore)
-outside["geometry"] = outside.geometry.union(outside.geometry.buffer(3000).intersection(offshore)).intersection(near_shore)
+cessions["geometry"] = cessions.geometry.union(cessions.geometry.buffer(8000).intersection(offshore)).intersection(near_shore)
+outside["geometry"] = outside.geometry.union(outside.geometry.buffer(8000).intersection(offshore)).intersection(near_shore)
 cessions["geometry"] = cessions.geometry.make_valid()
 outside["geometry"] = outside.geometry.make_valid()
 
@@ -175,6 +176,20 @@ rivers = rivers[rivers.geometry.geom_type == "LineString"].reset_index(drop=True
 mainland = provinces[provinces["iso_a2"].isin(["US", "CA", "MX"]) & ~provinces["name"].isin(["Hawaii"])]
 mainland = gpd.clip(mainland, (-140, 14, -52, 60)).dissolve()
 mainland = mainland.assign(name="North America")[["name", "geometry"]]
+
+# Land borders with Canada and Mexico ####
+
+neighbor_land = shapely.union_all(
+    provinces[provinces["iso_a2"].isin(["CA", "MX"])].to_crs(equal_area).geometry.values
+)
+borders = gpd.GeoDataFrame(
+    {"name": ["Canada and Mexico"]},
+    geometry=[lower_48_land.boundary.intersection(neighbor_land.buffer(500))],
+    crs=equal_area,
+)
+borders = borders.explode(index_parts=False)
+borders = borders[borders.geometry.geom_type == "LineString"].reset_index(drop=True).to_crs(4326)
+
 islands = gpd.read_file(download_directory / "countries-50m.json", layer="countries").set_crs(
     4326, allow_override=True
 )
@@ -188,8 +203,8 @@ reservations = gpd.read_file(work_directory / "reservations.geojson")[["NAME", "
 # Topologies ####
 
 state_topology = topojson.Topology(
-    [states.to_crs(4326), lakes, rivers],
-    object_name=["states", "lakes", "rivers"],
+    [states.to_crs(4326), lakes, rivers, borders],
+    object_name=["states", "lakes", "rivers", "borders"],
     prequantize=1e5,
     toposimplify=0.004,
     prevent_oversimplify=True,

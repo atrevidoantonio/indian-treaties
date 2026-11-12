@@ -100,12 +100,12 @@ html, body {
   vector-effect: non-scaling-stroke;
 }
 
-#map .river.r1 { stroke-width: 1.5px; }
+#map .river.r1 { stroke-width: 1.2px; }
 
 #map .cess,
 #map .out {
   stroke: rgba(32, 44, 48, .42);
-  stroke-width: .4px;
+  stroke-width: .25px;
   vector-effect: non-scaling-stroke;
 }
 
@@ -119,7 +119,7 @@ html, body {
   fill-opacity: 1;
   opacity: 1;
   stroke: #194936;
-  stroke-width: .45px;
+  stroke-width: .25px;
   vector-effect: non-scaling-stroke;
 }
 
@@ -130,14 +130,15 @@ html, body {
 #map .sb {
   fill: none;
   stroke: rgba(32, 44, 48, .32);
-  stroke-width: .65px;
+  stroke-width: .35px;
   vector-effect: non-scaling-stroke;
 }
 
 #map .nation {
+  pointer-events: none;
   fill: none;
-  stroke: ${THEME.line};
-  stroke-width: .9px;
+  stroke: #3B434B;
+  stroke-width: .5px;
   vector-effect: non-scaling-stroke;
 }
 
@@ -145,7 +146,7 @@ html, body {
   pointer-events: none;
   fill: none;
   stroke: ${THEME.ink};
-  stroke-width: 2px;
+  stroke-width: 1px;
   vector-effect: non-scaling-stroke;
 }
 
@@ -325,6 +326,7 @@ const lower48 = rewind({
   ]
 })
 const stateBorders = topojson.mesh(GEO.states, stateObj, (a, b) => a !== b)
+const landBorders = topojson.mesh(GEO.states, GEO.states.objects.borders)
 const neighbors = rewind(
   topojson.feature(GEO.neighbors, GEO.neighbors.objects.countries)
 )
@@ -484,7 +486,7 @@ function draw () {
     .attr('d', path)
   gLines
     .selectAll('path')
-    .data([stateBorders, lower48.features[0]])
+    .data([stateBorders, landBorders])
     .join('path')
     .attr('class', (d, i) => (i ? 'nation' : 'sb'))
     .attr('d', path)
@@ -1001,7 +1003,7 @@ function thumbs () {
     pa = d3.geoPath(pj)
   const base = `<path d="${pa(
     lower48
-  )}" fill="${THEME.unceded}" stroke="${THEME.line}" stroke-width=".9"/>`
+  )}" fill="${THEME.unceded}"/>`
   FEATURED.forEach(f => {
     const el = document.querySelector(`.card[data-k="${f.key}"] svg`)
     if (f.zone)
