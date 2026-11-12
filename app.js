@@ -32,6 +32,7 @@ const THEME = Object.freeze({
   context: '#F0F2EE',
   sea: '#F5F7F6',
   water: '#C9DCE3',
+  river: '#8FB6C6',
 
   treaty: '#E9C2B7',
   agreement: '#E0B1A5',
@@ -88,6 +89,18 @@ html, body {
 #map .land { fill: ${THEME.land}; }
 #map.year-on .land { fill: ${THEME.unceded}; }
 #map .lake { fill: ${THEME.water}; }
+
+#map .river {
+  pointer-events: none;
+  fill: none;
+  stroke: ${THEME.river};
+  stroke-width: .7px;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+#map .river.r1 { stroke-width: 1.5px; }
 
 #map .cess,
 #map .out {
@@ -300,11 +313,7 @@ const rewind = fc => {
   })
   return fc
 }
-const SKIP = new Set(['02', '15', '72', '78', '60', '66', '69'])
-const stateObj = {
-  type: 'GeometryCollection',
-  geometries: GEO.states.objects.states.geometries.filter(g => !SKIP.has(g.id))
-}
+const stateObj = GEO.states.objects.states
 const lower48 = rewind({
   type: 'FeatureCollection',
   features: [
@@ -329,12 +338,8 @@ const outside = rewind(topojson.feature(GEO.ceded, GEO.ceded.objects.outside))
 // Polygon boundaries, not artificial lightness shifts, distinguish adjacent cessions.
 const cessionFill = n => clsColour[C[n].k]
 
-const RESERVOIRS =
-  /Reservoir|Réservoir|Mead|Powell|Sakakawea|Oahe|Francis Case|Peck|Falcon|Kentucky Lake|Thurmond|Wheeler|Salton/
-const lakes = rewind(topojson.feature(GEO.ceded, GEO.ceded.objects.lakes))
-lakes.features = lakes.features.filter(
-  f => !RESERVOIRS.test(f.properties.name || '')
-)
+const lakes = rewind(topojson.feature(GEO.states, GEO.states.objects.lakes))
+const rivers = topojson.feature(GEO.states, GEO.states.objects.rivers)
 const res = rewind(topojson.feature(GEO.res, GEO.res.objects.reservations))
 const zoneFeatures = z => outside.features.filter(f => f.properties.z === z)
 
@@ -350,16 +355,18 @@ const svg = d3
     'aria-label',
     'Map of the lower 48 states showing 718 land cession areas from Royce’s schedule'
   )
+const coast = svg.append('clipPath').attr('id', 'coast').append('path')
 const g = svg.append('g')
 const gSea = g.append('g'),
   gNb = g.append('g'),
   gLand = g.append('g'),
-  gOut = g.append('g'),
-  gCess = g.append('g'),
+  gOut = g.append('g').attr('clip-path', 'url(#coast)'),
+  gCess = g.append('g').attr('clip-path', 'url(#coast)'),
+  gRes = g.append('g').attr('clip-path', 'url(#coast)'),
   gLakes = g.append('g'),
-  gRes = g.append('g'),
   gLines = g.append('g'),
-  gSel = g.append('g')
+  gRivers = g.append('g'),
+  gSel = g.append('g').attr('clip-path', 'url(#coast)')
 let W = 0,
   H = 0,
   K = 1,
@@ -398,6 +405,7 @@ function draw () {
     lower48
   )
   svg.attr('viewBox', `0 0 ${W} ${H}`)
+  coast.attr('d', path(lower48))
   gSea
     .selectAll('rect')
     .data([0])
@@ -412,6 +420,12 @@ function draw () {
     .data(lakes.features)
     .join('path')
     .attr('class', 'lake')
+    .attr('d', path)
+  gRivers
+    .selectAll('path')
+    .data(rivers.features)
+    .join('path')
+    .attr('class', d => 'river r' + d.properties.rank)
     .attr('d', path)
   gNb
     .selectAll('path')

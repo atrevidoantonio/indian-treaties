@@ -15,10 +15,12 @@ site_directory = Path(__file__).resolve().parent
 download_directory = site_directory / "source" / "downloads"
 work_directory = site_directory / "work"
 
+natural_earth = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/"
 downloads = {
-    "states-10m.json": "https://cdn.jsdelivr.net/npm/us-atlas@3/states-10m.json",
+    "ne_10m_admin_1_states_provinces_lakes.geojson": natural_earth + "ne_10m_admin_1_states_provinces_lakes.geojson",
+    "ne_10m_lakes.geojson": natural_earth + "ne_10m_lakes.geojson",
+    "ne_10m_rivers_lake_centerlines.geojson": natural_earth + "ne_10m_rivers_lake_centerlines.geojson",
     "countries-50m.json": "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-50m.json",
-    "ne_50m_lakes.geojson": "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_50m_lakes.geojson",
 }
 for file_name, url in downloads.items():
     if not (download_directory / file_name).exists():
@@ -28,19 +30,13 @@ equal_area = 5070
 square_meters_per_acre = 4046.8564224
 
 # Lower 48 states ####
+# Natural Earth's 1:10m states carry the coastline, sounds and bays, with the
+# Great Lakes cut out. The same file supplies Canada and Mexico.
 
-outside_lower_48 = [
-    "Alaska",
-    "Hawaii",
-    "Puerto Rico",
-    "Guam",
-    "American Samoa",
-    "United States Virgin Islands",
-    "Commonwealth of the Northern Mariana Islands",
-]
-states = gpd.read_file(download_directory / "states-10m.json", layer="states").set_crs(4326, allow_override=True)
-states = states[~states["name"].isin(outside_lower_48)].to_crs(equal_area)
-states["geometry"] = states.geometry.buffer(0)
+provinces = gpd.read_file(download_directory / "ne_10m_admin_1_states_provinces_lakes.geojson")
+provinces["geometry"] = provinces.geometry.make_valid()
+states = provinces[(provinces["iso_a2"] == "US") & ~provinces["name"].isin(["Alaska", "Hawaii"])]
+states = states[["name", "geometry"]].to_crs(equal_area)
 
 # Royce cessions and land outside them (from build_data.py) ####
 
@@ -66,6 +62,18 @@ for area in outside.itertuples():
         zone_rows.append({"z": zone_of[area.g], "y": area.y, "geometry": area.geometry})
 outside = gpd.GeoDataFrame(zone_rows, crs=equal_area)
 outside = outside[~outside.geometry.is_empty].reset_index(drop=True)
+
+# River strips ####
+# The land outside Royce's maps comes with thin strips where his sheets leave
+# a river unmapped. A strip under 8 km wide and more than 6 km from the body
+# of its zone goes back to the seams, so the Mississippi is not drawn as part
+# of the Gulf coast. Zones that are mostly coastal fringe are left whole.
+
+for row in outside.index:
+    zone = outside.at[row, "geometry"]
+    body = zone.buffer(-4000).buffer(4000)
+    if body.area > 0.5 * zone.area:
+        outside.at[row, "geometry"] = zone.intersection(body.buffer(6000))
 
 # Seams between Royce's map sheets ####
 # Many seams run along rivers. Each is cut into 20 km pieces, and each piece
@@ -112,22 +120,66 @@ for (layer, key), group in touching.groupby(["layer", "key"]):
         outside.at[key, "geometry"] = outside.at[key, "geometry"].union(seam)
 
 outside = outside.dissolve(by=["z", "y"], as_index=False)
-outside["a"] = (outside.geometry.area / square_meters_per_acre).round().astype("int64")
+outside["a"] = (outside.geometry.intersection(lower_48_land).area / square_meters_per_acre).round().astype("int64")
+
+# Coast ####
+# Every area runs 3 km past the shoreline and the page clips it to the land,
+# so simplified outlines never fall short of the coast.
+
+near_shore = lower_48_land.buffer(3000)
+offshore = near_shore.difference(lower_48_land)
+cessions["geometry"] = cessions.geometry.union(cessions.geometry.buffer(3000).intersection(offshore)).intersection(near_shore)
+outside["geometry"] = outside.geometry.union(outside.geometry.buffer(3000).intersection(offshore)).intersection(near_shore)
+cessions["geometry"] = cessions.geometry.make_valid()
+outside["geometry"] = outside.geometry.make_valid()
 
 # Natural lakes ####
 
 reservoirs = "Reservoir|Réservoir|Mead|Powell|Sakakawea|Oahe|Francis Case|Peck|Falcon|Kentucky Lake|Thurmond|Wheeler|Salton"
-lakes = gpd.read_file(download_directory / "ne_50m_lakes.geojson").cx[-126:-66, 24:50.5]
+lakes = gpd.read_file(download_directory / "ne_10m_lakes.geojson").cx[-126:-66, 24:50.5]
 lakes = lakes[lakes.to_crs(equal_area).geometry.area > 4e8]
 lakes = lakes[~lakes["name"].fillna("").str.contains(reservoirs)][["name", "geometry"]]
+lakes["geometry"] = lakes.geometry.make_valid()
+
+# Rivers ####
+# Centerlines run through reservoirs, which the map does not draw, and stop
+# at the natural lakes it does.
+
+principal_rivers = [
+    "Mississippi",
+    "Missouri",
+    "Ohio",
+    "Columbia",
+    "Colorado",
+    "Rio Grande",
+    "Arkansas",
+    "Red",
+    "Tennessee",
+    "Snake",
+    "St. Lawrence",
+]
+rivers = gpd.read_file(download_directory / "ne_10m_rivers_lake_centerlines.geojson")
+rivers = rivers[rivers["scalerank"] <= 7].to_crs(equal_area)
+rivers["rank"] = np.where(rivers["name"].isin(principal_rivers), 1, 2)
+rivers = rivers.dissolve(by=["name", "rank"], as_index=False, dropna=False)[["name", "rank", "geometry"]]
+rivers["geometry"] = rivers.geometry.intersection(lower_48_land.buffer(1000)).difference(
+    shapely.union_all(lakes.to_crs(equal_area).geometry.values)
+)
+rivers = rivers[~rivers.geometry.is_empty].explode(index_parts=False)
+rivers = rivers[rivers.geometry.geom_type == "LineString"].reset_index(drop=True).to_crs(4326)
 
 # Canada, Mexico and the islands in view ####
+# The mainland neighbors are merged with the lower 48, which the page draws
+# over them, so no gap opens along either border.
 
-countries = gpd.read_file(download_directory / "countries-50m.json", layer="countries").set_crs(
+mainland = provinces[provinces["iso_a2"].isin(["US", "CA", "MX"]) & ~provinces["name"].isin(["Hawaii"])]
+mainland = gpd.clip(mainland, (-140, 14, -52, 60)).dissolve()
+mainland = mainland.assign(name="North America")[["name", "geometry"]]
+islands = gpd.read_file(download_directory / "countries-50m.json", layer="countries").set_crs(
     4326, allow_override=True
 )
-countries = countries[countries["name"].isin(["Canada", "Mexico", "Cuba", "Bahamas"])]
-countries = gpd.clip(countries, (-140, 14, -52, 60))[["name", "geometry"]]
+islands = islands[islands["name"].isin(["Cuba", "Bahamas"])][["name", "geometry"]]
+countries = pd.concat([mainland, islands], ignore_index=True)
 
 # Present-day reservations ####
 
@@ -135,23 +187,28 @@ reservations = gpd.read_file(work_directory / "reservations.geojson")[["NAME", "
 
 # Topologies ####
 
+state_topology = topojson.Topology(
+    [states.to_crs(4326), lakes, rivers],
+    object_name=["states", "lakes", "rivers"],
+    prequantize=1e5,
+    toposimplify=0.004,
+    prevent_oversimplify=True,
+)
 ceded_topology = topojson.Topology(
     [
         cessions[["n", "y", "geometry"]].to_crs(4326),
         outside[["z", "y", "a", "geometry"]].to_crs(4326),
-        lakes,
     ],
     object_name=[
         "cessions",
         "outside",
-        "lakes",
     ],
     prequantize=1e5,
     toposimplify=0.01,
     prevent_oversimplify=True,
 )
 country_topology = topojson.Topology(
-    countries, object_name="countries", prequantize=2e4, toposimplify=0.02
+    countries, object_name="countries", prequantize=1e5, toposimplify=0.01
 )
 reservation_topology = topojson.Topology(
     reservations, object_name="reservations", prequantize=1e5, toposimplify=0.004, prevent_oversimplify=True
@@ -205,7 +262,7 @@ def wound_for_d3(topology):
 
 
 map_layers = {
-    "states": json.load(open(download_directory / "states-10m.json", encoding="utf-8")),
+    "states": wound_for_d3(state_topology),
     "neighbors": wound_for_d3(country_topology),
     "ceded": wound_for_d3(ceded_topology),
     "res": wound_for_d3(reservation_topology),
